@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Карта строек</title>
+  <link rel="stylesheet" href="./vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="./app.css?v=20260624-10">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <header class="sidebar__header">
+        <h1>Карта строек</h1>
+        <div class="summary" id="summary">Загрузка</div>
+      </header>
+
+      <section class="filters" aria-label="Фильтры">
+        <label class="field field_wide">
+          <span>Поиск</span>
+          <input id="searchInput" type="search" autocomplete="off" placeholder="УИН, адрес, название">
+        </label>
+
+        <label class="field">
+          <span>Округ</span>
+          <select id="areaSelect"></select>
+        </label>
+
+        <label class="field">
+          <span>Район</span>
+          <select id="districtSelect"></select>
+        </label>
+
+        <label class="field">
+          <span>Статус</span>
+          <select id="stateSelect"></select>
+        </label>
+
+        <div class="field field_wide org-field">
+          <span>Организация</span>
+          <input id="organizationInput" type="search" autocomplete="off" placeholder="Начните вводить название">
+          <div class="org-suggestions" id="organizationSuggestions" role="listbox" hidden></div>
+          <div class="org-selected" id="organizationSelected" hidden></div>
+        </div>
+
+        <button class="reset-button" id="resetButton" type="button">Сбросить</button>
+      </section>
+
+      <section class="results">
+        <div class="results__head">
+          <span id="resultCount">0</span>
+          <span id="resultLimit"></span>
+        </div>
+        <div class="results__list" id="resultList"></div>
+      </section>
+    </aside>
+
+    <main class="map-area">
+      <button class="sidebar-toggle" id="sidebarToggle" type="button" aria-label="Панель">☰</button>
+      <div id="map"></div>
+      <section class="details" id="details" aria-live="polite"></section>
+    </main>
+  </div>
+
+  <script src="./vendor/leaflet/leaflet.js"></script>
+  <script src="./vendor/proj4.js"></script>
+  <script type="module" src="./app.js?v=20260624-10"></script>
+</body>
+</html>
