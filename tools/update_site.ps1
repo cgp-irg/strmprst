@@ -3,8 +3,10 @@
 #   2. качает данные с stroimprosto.mos.ru (нужен российский IP)
 #   3. кладёт сайт + данные в ветку gh-pages одним коммитом (force-push, история не растёт)
 #
-# Запускается Планировщиком задач Windows; логи — logs\update-<дата>.log
+# Запускается Планировщиком задач Windows (задача strmprst-weekly); логи — logs\update-<дата>.log
 # Токен GitHub читается из файла (по умолчанию %USERPROFILE%\.strmprst\gh_token.txt).
+#
+# Файл должен оставаться в UTF-8 **с BOM**: Windows PowerShell 5.1 иначе читает кириллицу как ANSI.
 
 [CmdletBinding()]
 param(
@@ -29,12 +31,26 @@ $logFile = Join-Path $logDir ("update-{0:yyyy-MM-dd}.log" -f (Get-Date))
 
 function Write-Log([string]$Message) {
     $line = "{0:yyyy-MM-dd HH:mm:ss}  {1}" -f (Get-Date), $Message
-    $line | Tee-Object -FilePath $logFile -Append
+    Write-Host $line
+    Add-Content -Path $logFile -Value $line -Encoding UTF8
 }
 
 function Invoke-Step([string]$What, [scriptblock]$Action) {
     Write-Log $What
-    & $Action 2>&1 | Tee-Object -FilePath $logFile -Append
+    # git пишет предупреждения в stderr; в PS 5.1 при ErrorActionPreference=Stop это стало бы
+    # исключением ещё до проверки кода возврата, поэтому об успехе судим только по коду выхода
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Action 2>&1 | ForEach-Object {
+            $text = "$_"
+            Write-Host "    $text"
+            Add-Content -Path $logFile -Value "    $text" -Encoding UTF8
+        }
+    }
+    finally {
+        $ErrorActionPreference = $previous
+    }
     if ($LASTEXITCODE -ne 0) { throw "$What — код выхода $LASTEXITCODE" }
 }
 
@@ -45,10 +61,8 @@ try {
     $build  = Join-Path $RepoDir 'build\site'
 
     # 1. свежий код сайта
-    if (-not $SkipData) {
-        Invoke-Step 'git fetch' { git -C $RepoDir fetch --depth 1 origin main }
-        Invoke-Step 'git reset --hard origin/main' { git -C $RepoDir reset --hard origin/main }
-    }
+    Invoke-Step 'git fetch' { git -C $RepoDir fetch --depth 1 origin main }
+    Invoke-Step 'git reset --hard origin/main' { git -C $RepoDir reset --hard origin/main }
 
     # 2. данные
     if ($SkipData) {
@@ -66,8 +80,8 @@ try {
     }
 
     $meta = Get-Content (Join-Path $build 'data\metadata.json') -Raw -Encoding utf8 | ConvertFrom-Json
-    Write-Log ("данные собраны: {0} проектов, {1} полигонов, {2} организаций" -f `
-        $meta.project_count, $meta.polygon_count, $meta.organization_count)
+    Write-Log ("данные: {0} проектов, {1} полигонов, {2} организаций, ошибок загрузки {3}" -f `
+        $meta.project_count, $meta.polygon_count, $meta.organization_count, ($meta.card_errors + $meta.ps_errors))
 
     # 3. статика сайта рядом с данными
     foreach ($item in @('index.html', 'app.js', 'app.css', '.nojekyll')) {
@@ -86,16 +100,33 @@ try {
     if (-not $token) { throw "файл токена пуст: $TokenFile" }
     $pushUrl = $Remote -replace '^https://', "https://x-access-token:$token@"
 
+    Remove-Item -Recurse -Force (Join-Path $build '.git') -ErrorAction SilentlyContinue
     Push-Location $build
     try {
         Invoke-Step 'git init (gh-pages)' { git init -q -b gh-pages }
-        Invoke-Step 'git config' { git config user.email 'bot@strmprst'; git config user.name 'strmprst updater' }
+        Invoke-Step 'git config' {
+            git config user.email 'bot@strmprst'
+            git config user.name 'strmprst updater'
+            git config core.autocrlf false
+        }
         Invoke-Step 'git add' { git add -A }
         $message = "Данные stroimprosto на {0:yyyy-MM-dd}: {1} проектов" -f (Get-Date), $meta.project_count
         Invoke-Step 'git commit' { git commit -q -m $message }
+
         Write-Log 'git push --force origin gh-pages'
-        $pushLog = (git push --force --quiet $pushUrl gh-pages:gh-pages 2>&1 | Out-String)
-        if ($LASTEXITCODE -ne 0) { throw ("push не удался: " + ($pushLog -replace [regex]::Escape($token), '***')) }
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $pushLog = (git push --force --quiet $pushUrl gh-pages:gh-pages 2>&1 |
+                ForEach-Object { "$_" } | Out-String)
+        }
+        finally {
+            $ErrorActionPreference = $previous
+        }
+        if ($LASTEXITCODE -ne 0) {
+            $safe = ($pushLog -replace [regex]::Escape($token), '***') -replace '\s+', ' '
+            throw "push не удался: $safe"
+        }
     }
     finally {
         Pop-Location
@@ -108,6 +139,6 @@ try {
     exit 0
 }
 catch {
-    Write-Log ("ОШИБКА: " + $_.Exception.Message)
+    Write-Log ("ОШИБКА: " + ($_.Exception.Message -replace '\s+', ' '))
     exit 1
 }
