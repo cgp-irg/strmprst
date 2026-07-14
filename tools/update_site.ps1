@@ -20,6 +20,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $env:GIT_TERMINAL_PROMPT = '0'
+# иначе PS 5.1 читает вывод python/git в OEM-кодировке и в логе получаются кракозябры
+$env:PYTHONIOENCODING = 'utf-8'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 if (-not $RepoDir) {
     $RepoDir = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
