@@ -82,9 +82,38 @@ try {
         }
     }
 
+    # 2а. предыдущая публикация (ветка gh-pages) — источник состояния для архива
+    $prev = Join-Path $RepoDir 'build\prev'
+    if (-not (Test-Path (Join-Path $prev '.git'))) {
+        Remove-Item -Recurse -Force $prev -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Path $prev -Force | Out-Null
+        Invoke-Step 'git init (prev)' { git -C $prev init -q }
+        Invoke-Step 'git remote add' { git -C $prev remote add origin $Remote }
+    }
+    $prevOk = $true
+    try {
+        Invoke-Step 'git fetch gh-pages (прошлая публикация)' { git -C $prev fetch -q --depth 1 origin gh-pages }
+        Invoke-Step 'git checkout gh-pages' { git -C $prev checkout -q -f -B gh-pages FETCH_HEAD }
+    }
+    catch {
+        $prevOk = $false
+        Write-Log "прошлую публикацию получить не удалось ($($_.Exception.Message)) — архив не пополняем"
+    }
+
+    # 2б. архив: объекты, исчезнувшие из источника
+    Invoke-Step 'архив исчезнувших объектов' {
+        if ($prevOk) {
+            & $python (Join-Path $RepoDir 'tools\merge_archive.py') --new (Join-Path $build 'data') --prev (Join-Path $prev 'data')
+        }
+        else {
+            & $python (Join-Path $RepoDir 'tools\merge_archive.py') --new (Join-Path $build 'data')
+        }
+    }
+
     $meta = Get-Content (Join-Path $build 'data\metadata.json') -Raw -Encoding utf8 | ConvertFrom-Json
-    Write-Log ("данные: {0} проектов, {1} полигонов, {2} организаций, ошибок загрузки {3}" -f `
-        $meta.project_count, $meta.polygon_count, $meta.organization_count, ($meta.card_errors + $meta.ps_errors))
+    Write-Log ("данные: {0} проектов, {1} полигонов, {2} организаций, ошибок загрузки {3}; в архиве {4} (новых {5})" -f `
+        $meta.project_count, $meta.polygon_count, $meta.organization_count, ($meta.card_errors + $meta.ps_errors), `
+        $meta.archived_count, $meta.archived_new)
 
     # 3. статика сайта рядом с данными
     foreach ($item in @('index.html', 'app.js', 'app.css', '.nojekyll')) {

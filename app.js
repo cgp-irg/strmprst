@@ -1,6 +1,8 @@
 const DATA_URL = './data/projects_web.geojson';
 const META_URL = './data/metadata.json';
 const ORG_URL = './data/org_index.json';
+const ARCHIVE_URL = './data/archive.geojson';
+const ARCHIVE_COLOR = '#9ca3af';
 const LIST_RENDER_LIMIT = 200;
 const ORG_SUGGEST_LIMIT = 12;
 const POLYGON_ZOOM = 15;
@@ -59,8 +61,12 @@ const refs = {
   reset: document.getElementById('resetButton'),
   sidebar: document.getElementById('sidebar'),
   sidebarToggle: document.getElementById('sidebarToggle'),
+  archiveToggle: document.getElementById('archiveToggle'),
+  archiveHint: document.getElementById('archiveHint'),
 };
 
+let activeFeatures = [];
+let archiveFeatures = [];
 let allFeatures = [];
 let organizationIndex = [];
 let selectedOrganization = null;
@@ -80,13 +86,20 @@ init().catch((error) => {
 });
 
 async function init() {
-  const [metadata, geojson, organizations] = await Promise.all([
+  const [metadata, geojson, organizations, archive] = await Promise.all([
     fetch(META_URL).then((response) => response.json()),
     fetch(DATA_URL).then((response) => response.json()),
     fetch(ORG_URL).then((response) => response.json()),
+    // архива может ещё не быть — карта должна работать и без него
+    fetch(ARCHIVE_URL).then((response) => (response.ok ? response.json() : null)).catch(() => null),
   ]);
 
-  allFeatures = (geojson.features || []).map(prepareFeature);
+  activeFeatures = (geojson.features || []).map(prepareFeature);
+  archiveFeatures = ((archive && archive.features) || []).map((feature) => {
+    feature.properties = { ...(feature.properties || {}), archived: true };
+    return prepareFeature(feature);
+  });
+  allFeatures = activeFeatures;
   organizationIndex = (organizations || []).map(prepareOrganization);
   fillSelect(refs.area, metadata.areas);
   fillSelect(refs.district, metadata.districts);
@@ -112,7 +125,9 @@ async function init() {
   refs.organizationSuggestions.addEventListener('click', onOrganizationSuggestionClick);
   refs.organizationSelected.addEventListener('click', onOrganizationSelectedClick);
   refs.reset.addEventListener('click', resetFilters);
+  refs.archiveToggle.addEventListener('change', onArchiveToggle);
   refs.sidebarToggle.addEventListener('click', () => refs.sidebar.classList.toggle('sidebar_open'));
+  renderArchiveHint();
   map.on('click', () => closeDetails());
   document.addEventListener('click', (event) => {
     if (!event.target.closest('.org-field')) hideOrganizationSuggestions();
@@ -267,6 +282,26 @@ function resetFilters() {
   selectedId = null;
   lastMapMode = null;
   applyFilters({ fit: true });
+}
+
+function onArchiveToggle() {
+  allFeatures = refs.archiveToggle.checked
+    ? activeFeatures.concat(archiveFeatures)
+    : activeFeatures;
+  renderLegend(allFeatures);
+  renderArchiveHint();
+  applyFilters();
+}
+
+function renderArchiveHint() {
+  if (!refs.archiveHint) return;
+  if (!archiveFeatures.length) {
+    refs.archiveHint.textContent = 'Архив пуст';
+    refs.archiveToggle.disabled = true;
+    return;
+  }
+  const count = archiveFeatures.length;
+  refs.archiveHint.textContent = `${formatNumber(count)} ${plural(count, 'объект', 'объекта', 'объектов')} больше нет в источнике`;
 }
 
 function applyFilters(options = {}) {
@@ -482,11 +517,12 @@ function renderList(features) {
     const props = feature.properties || {};
     const item = document.createElement('button');
     item.type = 'button';
-    item.className = `result-item${selectedId === props.id ? ' result-item_active' : ''}`;
+    item.className = `result-item${selectedId === props.id ? ' result-item_active' : ''}${props.archived ? ' result-item_archived' : ''}`;
     item.dataset.id = props.id;
     item.innerHTML = `
       <span class="result-item__title">${escapeHtml(props.name || props.address || props.uin || 'Без названия')}</span>
       <span class="result-item__meta">
+        ${props.archived ? '<span class="pill pill_archived">Архив</span>' : ''}
         ${props.uin ? `<span class="pill">${escapeHtml(props.uin)}</span>` : ''}
         ${props.state ? `<span class="pill">${escapeHtml(props.state)}</span>` : ''}
         ${props.district ? `<span class="pill">${escapeHtml(props.district)}</span>` : ''}
@@ -570,6 +606,13 @@ function openProjectPopup(feature, layer, latlng) {
   if (node) loadPsSections(uin, node);
 }
 
+function archivedNotice(props) {
+  if (!props.archived) return '';
+  const seen = formatUpdatedAt(props.last_seen);
+  const tail = seen ? ` Последний раз встречался ${seen}.` : '';
+  return `<div class="archived-notice">Снят с публикации: объекта больше нет на stroimprosto.mos.ru.${escapeHtml(tail)}</div>`;
+}
+
 function popupLatLngForFeature(feature, layer) {
   if (layer?.getBounds) return layer.getBounds().getCenter();
   if (layer?.getLatLng) return layer.getLatLng();
@@ -583,6 +626,7 @@ function featureDetailsHtml(feature) {
   return `
     <div class="attr-popup" data-uin="${escapeHtml(uin)}">
       <div class="attr-popup__title">${escapeHtml(title)}</div>
+      ${archivedNotice(props)}
       ${props.state ? `<span class="status-pill" style="background:${colorByState(props.state)}">${escapeHtml(props.state)}</span>` : ''}
       <dl class="details__grid">
         ${detailRow('УИН', props.uin)}
@@ -784,19 +828,22 @@ function normalize(value) {
 }
 
 function featureStyle(feature) {
-  const color = colorByState(feature?.properties?.state);
+  const archived = feature?.properties?.archived;
+  const color = archived ? ARCHIVE_COLOR : colorByState(feature?.properties?.state);
   const selected = feature?.properties?.id === selectedId;
   return {
     color: selected ? '#111827' : color,
     weight: selected ? 3 : 1.4,
     opacity: 0.95,
+    dashArray: archived ? '4 3' : null,
     fillColor: color,
-    fillOpacity: selected ? 0.55 : 0.28,
+    fillOpacity: selected ? 0.55 : (archived ? 0.16 : 0.28),
   };
 }
 
 function pointStyle(feature) {
-  const color = colorByState(feature?.properties?.state);
+  const archived = feature?.properties?.archived;
+  const color = archived ? ARCHIVE_COLOR : colorByState(feature?.properties?.state);
   const selected = feature?.properties?.id === selectedId;
   return {
     radius: selected ? 8 : 6,
@@ -820,7 +867,12 @@ function renderLegend(features) {
   const node = document.querySelector('.legend-control');
   if (!node) return;
   const counts = new Map();
+  let archivedCount = 0;
   features.forEach((feature) => {
+    if (feature.properties?.archived) {
+      archivedCount += 1;
+      return;
+    }
     const state = feature.properties?.state || 'Без статуса';
     counts.set(state, (counts.get(state) || 0) + 1);
   });
@@ -833,10 +885,18 @@ function renderLegend(features) {
         <span class="legend-count">${formatNumber(count)}</span>
       </div>
     `).join('');
+  const archiveRow = archivedCount ? `
+      <div class="legend-row">
+        <span class="legend-swatch legend-swatch_archived"></span>
+        <span class="legend-label">Архив (нет в источнике)</span>
+        <span class="legend-count">${formatNumber(archivedCount)}</span>
+      </div>
+    ` : '';
   node.innerHTML = `
     <div class="legend-title">Легенда</div>
     <div class="legend-subtitle">Цвет по статусу</div>
     ${rows}
+    ${archiveRow}
   `;
 }
 
@@ -923,6 +983,15 @@ function dateOnly(value) {
 
 function formatNumber(value) {
   return new Intl.NumberFormat('ru-RU').format(value);
+}
+
+function plural(count, one, few, many) {
+  const mod100 = count % 100;
+  if (mod100 >= 11 && mod100 <= 14) return many;
+  const mod10 = count % 10;
+  if (mod10 === 1) return one;
+  if (mod10 >= 2 && mod10 <= 4) return few;
+  return many;
 }
 
 function formatUpdatedAt(value) {

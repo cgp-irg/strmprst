@@ -831,3 +831,57 @@ select {
 .legend-control_hidden {
   display: none;
 }
+
+/* Архив: объекты, исчезнувшие из источника */
+.archive-field {
+  gap: 4px;
+}
+
+.archive-field__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.archive-field__row input {
+  width: 15px;
+  min-height: 0;
+  height: 15px;
+  margin: 0;
+  flex: none;
+  accent-color: var(--accent);
+}
+
+.archive-field__hint {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.legend-swatch_archived {
+  background: #9ca3af;
+  border-style: dashed;
+  border-color: #6b7280;
+}
+
+.pill_archived {
+  background: #e5e7eb;
+  color: #4b5563;
+}
+
+.result-item_archived .result-item__title {
+  color: var(--muted);
+}
+
+.archived-notice {
+  margin: 6px 0;
+  padding: 6px 8px;
+  border-left: 3px solid #9ca3af;
+  border-radius: 4px;
+  background: #f3f4f6;
+  color: #4b5563;
+  font-size: 12px;
+  line-height: 1.35;
+}
