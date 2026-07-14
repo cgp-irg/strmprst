@@ -94,7 +94,13 @@ async function init() {
   renderLegend(allFeatures);
   initDxfExportTool();
 
-  refs.summary.textContent = `${formatNumber(metadata.project_count)} проектов, ${formatNumber(metadata.polygon_count)} полигонов`;
+  const summaryParts = [
+    `${formatNumber(metadata.project_count)} проектов`,
+    `${formatNumber(metadata.polygon_count)} полигонов`,
+  ];
+  const updated = formatUpdatedAt(metadata.generated_at);
+  if (updated) summaryParts.push(`обновлено ${updated}`);
+  refs.summary.textContent = summaryParts.join(', ');
   refs.search.addEventListener('input', scheduleFilter);
   refs.area.addEventListener('change', applyFilters);
   refs.district.addEventListener('change', applyFilters);
@@ -917,6 +923,13 @@ function dateOnly(value) {
 
 function formatNumber(value) {
   return new Intl.NumberFormat('ru-RU').format(value);
+}
+
+function formatUpdatedAt(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }).format(date);
 }
 
 function escapeHtml(value) {
