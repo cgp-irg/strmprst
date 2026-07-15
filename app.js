@@ -609,7 +609,7 @@ function openProjectPopup(feature, layer, latlng) {
 function archivedNotice(props) {
   if (!props.archived) return '';
   const seen = formatUpdatedAt(props.last_seen);
-  const tail = seen ? ` Последний раз встречался ${seen}.` : '';
+  const tail = seen ? ` Последний раз встречался ${seen}` : '';
   return `<div class="archived-notice">Снят с публикации: объекта больше нет на stroimprosto.mos.ru.${escapeHtml(tail)}</div>`;
 }
 
