@@ -15,7 +15,8 @@ param(
     [string]$Remote    = 'https://github.com/cgp-irg/strmprst.git',
     [int]$Workers      = 12,
     [switch]$SkipPush,             # только собрать данные, ничего не публиковать
-    [switch]$SkipData              # не качать заново, взять уже собранное build\site\data
+    [switch]$SkipData,             # не качать заново, взять уже собранное build\site\data
+    [switch]$AllowShrink           # разрешить публикацию, если объектов стало сильно меньше
 )
 
 $ErrorActionPreference = 'Stop'
@@ -67,22 +68,7 @@ try {
     Invoke-Step 'git fetch' { git -C $RepoDir fetch --depth 1 origin main }
     Invoke-Step 'git reset --hard origin/main' { git -C $RepoDir reset --hard origin/main }
 
-    # 2. данные
-    if ($SkipData) {
-        if (-not (Test-Path (Join-Path $build 'data\metadata.json'))) {
-            throw "SkipData: нет готовых данных в $build\data"
-        }
-        Write-Log 'SkipData: используются уже собранные данные'
-    }
-    else {
-        if (Test-Path $build) { Remove-Item -Recurse -Force $build }
-        New-Item -ItemType Directory -Path $build -Force | Out-Null
-        Invoke-Step 'сбор данных с stroimprosto.mos.ru' {
-            & $python (Join-Path $RepoDir 'tools\update_data.py') --out (Join-Path $build 'data') --workers $Workers
-        }
-    }
-
-    # 2а. предыдущая публикация (ветка gh-pages) — источник состояния для архива
+    # 2. предыдущая публикация (ветка gh-pages) — состояние для архива и список известных id
     $prev = Join-Path $RepoDir 'build\prev'
     if (-not (Test-Path (Join-Path $prev '.git'))) {
         Remove-Item -Recurse -Force $prev -ErrorAction SilentlyContinue
@@ -100,6 +86,26 @@ try {
         Write-Log "прошлую публикацию получить не удалось ($($_.Exception.Message)) — архив не пополняем"
     }
 
+    # 2а. данные
+    if ($SkipData) {
+        if (-not (Test-Path (Join-Path $build 'data\metadata.json'))) {
+            throw "SkipData: нет готовых данных в $build\data"
+        }
+        Write-Log 'SkipData: используются уже собранные данные'
+    }
+    else {
+        if (Test-Path $build) { Remove-Item -Recurse -Force $build }
+        New-Item -ItemType Directory -Path $build -Force | Out-Null
+        Invoke-Step 'сбор данных с stroimprosto.mos.ru' {
+            $dataArgs = @('--out', (Join-Path $build 'data'), '--workers', $Workers)
+            # источник убрал часть объектов с карты, но карточки по id живы:
+            # прошлая публикация даёт список известных id, чтобы они не выпали из выгрузки
+            if ($prevOk) { $dataArgs += @('--prev', (Join-Path $prev 'data')) }
+            if ($AllowShrink) { $dataArgs += '--allow-shrink' }
+            & $python (Join-Path $RepoDir 'tools\update_data.py') @dataArgs
+        }
+    }
+
     # 2б. архив: объекты, исчезнувшие из источника
     Invoke-Step 'архив исчезнувших объектов' {
         if ($prevOk) {
@@ -111,8 +117,9 @@ try {
     }
 
     $meta = Get-Content (Join-Path $build 'data\metadata.json') -Raw -Encoding utf8 | ConvertFrom-Json
-    Write-Log ("данные: {0} проектов, {1} полигонов, {2} организаций, ошибок загрузки {3}; в архиве {4} (новых {5})" -f `
-        $meta.project_count, $meta.polygon_count, $meta.organization_count, ($meta.card_errors + $meta.ps_errors), `
+    Write-Log ("данные: {0} проектов ({1} на карте источника, {2} снято с неё), {3} полигонов, {4} организаций, ошибок загрузки {5}; в архиве {6} (новых {7})" -f `
+        $meta.project_count, $meta.map_count, $meta.off_map_count, $meta.polygon_count, `
+        $meta.organization_count, ($meta.card_errors + $meta.ps_errors), `
         $meta.archived_count, $meta.archived_new)
 
     # 3. статика сайта рядом с данными

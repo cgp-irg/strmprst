@@ -3,6 +3,7 @@ const META_URL = './data/metadata.json';
 const ORG_URL = './data/org_index.json';
 const ARCHIVE_URL = './data/archive.geojson';
 const ARCHIVE_COLOR = '#9ca3af';
+const OFF_MAP_DASH = '6 4';
 const LIST_RENDER_LIMIT = 200;
 const ORG_SUGGEST_LIMIT = 12;
 const POLYGON_ZOOM = 15;
@@ -63,9 +64,12 @@ const refs = {
   sidebarToggle: document.getElementById('sidebarToggle'),
   archiveToggle: document.getElementById('archiveToggle'),
   archiveHint: document.getElementById('archiveHint'),
+  offMapToggle: document.getElementById('offMapToggle'),
+  offMapHint: document.getElementById('offMapHint'),
 };
 
 let activeFeatures = [];
+let offMapFeatures = [];
 let archiveFeatures = [];
 let allFeatures = [];
 let organizationIndex = [];
@@ -94,12 +98,15 @@ async function init() {
     fetch(ARCHIVE_URL).then((response) => (response.ok ? response.json() : null)).catch(() => null),
   ]);
 
-  activeFeatures = (geojson.features || []).map(prepareFeature);
+  const prepared = (geojson.features || []).map(prepareFeature);
+  // источник убрал часть объектов со своей карты, но данные по ним ещё отдаёт
+  activeFeatures = prepared.filter((feature) => !feature.properties?.off_map);
+  offMapFeatures = prepared.filter((feature) => feature.properties?.off_map);
   archiveFeatures = ((archive && archive.features) || []).map((feature) => {
     feature.properties = { ...(feature.properties || {}), archived: true };
     return prepareFeature(feature);
   });
-  allFeatures = activeFeatures;
+  recomputeFeatures();
   organizationIndex = (organizations || []).map(prepareOrganization);
   fillSelect(refs.area, metadata.areas);
   fillSelect(refs.district, metadata.districts);
@@ -111,6 +118,9 @@ async function init() {
     `${formatNumber(metadata.project_count)} проектов`,
     `${formatNumber(metadata.polygon_count)} полигонов`,
   ];
+  if (metadata.off_map_count) {
+    summaryParts.push(`${formatNumber(metadata.off_map_count)} снято с карты источника`);
+  }
   const updated = formatUpdatedAt(metadata.generated_at);
   if (updated) summaryParts.push(`обновлено ${updated}`);
   refs.summary.textContent = summaryParts.join(', ');
@@ -125,9 +135,11 @@ async function init() {
   refs.organizationSuggestions.addEventListener('click', onOrganizationSuggestionClick);
   refs.organizationSelected.addEventListener('click', onOrganizationSelectedClick);
   refs.reset.addEventListener('click', resetFilters);
-  refs.archiveToggle.addEventListener('change', onArchiveToggle);
+  refs.archiveToggle.addEventListener('change', onLayerToggle);
+  refs.offMapToggle.addEventListener('change', onLayerToggle);
   refs.sidebarToggle.addEventListener('click', () => refs.sidebar.classList.toggle('sidebar_open'));
   renderArchiveHint();
+  renderOffMapHint();
   map.on('click', () => closeDetails());
   document.addEventListener('click', (event) => {
     if (!event.target.closest('.org-field')) hideOrganizationSuggestions();
@@ -284,13 +296,29 @@ function resetFilters() {
   applyFilters({ fit: true });
 }
 
-function onArchiveToggle() {
-  allFeatures = refs.archiveToggle.checked
-    ? activeFeatures.concat(archiveFeatures)
-    : activeFeatures;
+function onLayerToggle() {
+  recomputeFeatures();
   renderLegend(allFeatures);
   renderArchiveHint();
+  renderOffMapHint();
   applyFilters();
+}
+
+function recomputeFeatures() {
+  allFeatures = activeFeatures
+    .concat(refs.offMapToggle?.checked === false ? [] : offMapFeatures)
+    .concat(refs.archiveToggle?.checked ? archiveFeatures : []);
+}
+
+function renderOffMapHint() {
+  if (!refs.offMapHint) return;
+  if (!offMapFeatures.length) {
+    refs.offMapHint.textContent = 'Таких объектов нет';
+    refs.offMapToggle.disabled = true;
+    return;
+  }
+  const count = offMapFeatures.length;
+  refs.offMapHint.textContent = `${formatNumber(count)} ${plural(count, 'объект', 'объекта', 'объектов')} нет на карте stroimprosto, данные по ним ещё обновляются`;
 }
 
 function renderArchiveHint() {
@@ -523,6 +551,7 @@ function renderList(features) {
       <span class="result-item__title">${escapeHtml(props.name || props.address || props.uin || 'Без названия')}</span>
       <span class="result-item__meta">
         ${props.archived ? '<span class="pill pill_archived">Архив</span>' : ''}
+        ${!props.archived && props.off_map ? '<span class="pill pill_offmap">Не на карте источника</span>' : ''}
         ${props.uin ? `<span class="pill">${escapeHtml(props.uin)}</span>` : ''}
         ${props.state ? `<span class="pill">${escapeHtml(props.state)}</span>` : ''}
         ${props.district ? `<span class="pill">${escapeHtml(props.district)}</span>` : ''}
@@ -607,10 +636,15 @@ function openProjectPopup(feature, layer, latlng) {
 }
 
 function archivedNotice(props) {
-  if (!props.archived) return '';
-  const seen = formatUpdatedAt(props.last_seen);
-  const tail = seen ? ` Последний раз встречался ${seen}` : '';
-  return `<div class="archived-notice">Снят с публикации: объекта больше нет на stroimprosto.mos.ru.${escapeHtml(tail)}</div>`;
+  if (props.archived) {
+    const seen = formatUpdatedAt(props.last_seen);
+    const tail = seen ? ` Последний раз встречался ${seen}` : '';
+    return `<div class="archived-notice">Снят с публикации: объекта больше нет на stroimprosto.mos.ru.${escapeHtml(tail)}</div>`;
+  }
+  if (props.off_map) {
+    return '<div class="archived-notice archived-notice_offmap">Объекта нет на карте stroimprosto.mos.ru, но его карточка там ещё обновляется.</div>';
+  }
+  return '';
 }
 
 function popupLatLngForFeature(feature, layer) {
@@ -659,6 +693,7 @@ function openDetailsCard(feature) {
       <h2>${escapeHtml(title)}</h2>
       <button class="details__close" type="button" aria-label="Закрыть">×</button>
     </div>
+    ${archivedNotice(props)}
     ${props.state ? `<span class="status-pill" style="background:${colorByState(props.state)}">${escapeHtml(props.state)}</span>` : ''}
     <dl class="details__grid">
       ${detailRow('УИН', props.uin)}
@@ -829,15 +864,16 @@ function normalize(value) {
 
 function featureStyle(feature) {
   const archived = feature?.properties?.archived;
+  const offMap = feature?.properties?.off_map;
   const color = archived ? ARCHIVE_COLOR : colorByState(feature?.properties?.state);
   const selected = feature?.properties?.id === selectedId;
   return {
     color: selected ? '#111827' : color,
     weight: selected ? 3 : 1.4,
     opacity: 0.95,
-    dashArray: archived ? '4 3' : null,
+    dashArray: archived ? '4 3' : (offMap ? OFF_MAP_DASH : null),
     fillColor: color,
-    fillOpacity: selected ? 0.55 : (archived ? 0.16 : 0.28),
+    fillOpacity: selected ? 0.55 : (archived ? 0.16 : (offMap ? 0.18 : 0.28)),
   };
 }
 
@@ -868,11 +904,13 @@ function renderLegend(features) {
   if (!node) return;
   const counts = new Map();
   let archivedCount = 0;
+  let offMapCount = 0;
   features.forEach((feature) => {
     if (feature.properties?.archived) {
       archivedCount += 1;
       return;
     }
+    if (feature.properties?.off_map) offMapCount += 1;
     const state = feature.properties?.state || 'Без статуса';
     counts.set(state, (counts.get(state) || 0) + 1);
   });
@@ -892,10 +930,18 @@ function renderLegend(features) {
         <span class="legend-count">${formatNumber(archivedCount)}</span>
       </div>
     ` : '';
+  const offMapRow = offMapCount ? `
+      <div class="legend-row">
+        <span class="legend-swatch legend-swatch_offmap"></span>
+        <span class="legend-label">Снято с карты источника</span>
+        <span class="legend-count">${formatNumber(offMapCount)}</span>
+      </div>
+    ` : '';
   node.innerHTML = `
     <div class="legend-title">Легенда</div>
     <div class="legend-subtitle">Цвет по статусу</div>
     ${rows}
+    ${offMapRow}
     ${archiveRow}
   `;
 }

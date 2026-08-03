@@ -6,12 +6,20 @@
   ws/getProjectCard.php  — карточка: геометрия + атрибуты
   ws/getPSData.php       — паспорт проекта: организации, ТЭП, документы, кадастр
 
+С 20.07.2026 источник показывает на карте только часть объектов (2.8 тыс. вместо
+9.6 тыс.; вычищены почти все «Планируемые»), но карточки убранных объектов по id
+по-прежнему отдаются. Поэтому качаем по объединению «индекс карты + ранее
+известные id» (--prev: каталог прошлой публикации), а объектам вне индекса
+ставим признак `off_map`. Список id переносится из выгрузки в выгрузку через
+known_ids.json.
+
 Результат (каталог --out):
   projects_web.geojson  полигоны (упрощённые) + точки-фолбэки
   metadata.json         счётчики, списки округов/районов/статусов, generated_at
   ps/<UIN>.json         паспорт проекта
   ps_index.json         список UIN, у которых паспорт непустой
   org_index.json        индекс организаций для фильтра
+  known_ids.json        все id, по которым карточка отдалась (вход для следующего запуска)
 
 Сайт доступен только с российских IP — запускать с российского адреса.
 """
@@ -249,31 +257,77 @@ def write_json(path: Path, payload: Any, compact: bool = True) -> None:
     )
 
 
-def build(out_dir: Path, workers: int, min_projects: int) -> dict[str, Any]:
+def load_previous_ids(prev_dir: Path | None) -> set[int]:
+    """id из прошлой публикации: known_ids.json плюс сами объекты projects_web.geojson.
+
+    Архив не трогаем: там объекты, у которых карточка уже не отдавалась."""
+    if prev_dir is None:
+        return set()
+    ids: set[int] = set()
+    known_path = prev_dir / "known_ids.json"
+    if known_path.exists():
+        try:
+            ids.update(int(value) for value in json.loads(known_path.read_text(encoding="utf-8")))
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            log(f"known_ids.json прочитать не удалось ({exc!r}) — берём id из projects_web.geojson")
+    projects_path = prev_dir / "projects_web.geojson"
+    if projects_path.exists():
+        data = json.loads(projects_path.read_text(encoding="utf-8"))
+        for feature in data.get("features") or []:
+            value = (feature.get("properties") or {}).get("id")
+            if value is not None:
+                ids.add(int(value))
+    return ids
+
+
+def previous_project_count(prev_dir: Path | None) -> int:
+    if prev_dir is None:
+        return 0
+    meta_path = prev_dir / "metadata.json"
+    if not meta_path.exists():
+        return 0
+    try:
+        return int(json.loads(meta_path.read_text(encoding="utf-8")).get("project_count") or 0)
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return 0
+
+
+def build(out_dir: Path, workers: int, min_index: int, min_projects: int,
+          prev_dir: Path | None, max_shrink: float, allow_shrink: bool) -> dict[str, Any]:
     session = requests.Session()
     log("индекс проектов…")
     index = post(session, "getprojects.php")
     search_index = {int(item["id"]): item for item in post(session, "psSearchIndex.php")
                     if item.get("id") is not None}
-    project_ids = sorted({int(item["id"]) for item in index if item.get("id") is not None})
-    log(f"проектов на карте: {len(project_ids)}")
-    if len(project_ids) < min_projects:
+    map_ids = {int(item["id"]) for item in index if item.get("id") is not None}
+    log(f"проектов на карте источника: {len(map_ids)}")
+    if len(map_ids) < min_index:
         raise SystemExit(
-            f"на карте всего {len(project_ids)} проектов (порог {min_projects}) — "
+            f"на карте всего {len(map_ids)} проектов (порог {min_index}) — "
             "похоже на сбой источника, обновление отменено"
         )
+
+    known_ids = load_previous_ids(prev_dir)
+    project_ids = sorted(map_ids | known_ids)
+    off_map_ids = set(project_ids) - map_ids
+    if off_map_ids:
+        log(f"известны по прошлой выгрузке, но убраны с карты источника: {len(off_map_ids)}")
 
     cards, card_errors = run_pool(project_ids, fetch_card, workers, "карточки")
 
     features: list[dict[str, Any]] = []
     polygon_count = 0
     point_count = 0
+    off_map_count = 0
     for project_id in project_ids:
         card = cards.get(project_id) or {}
         if not card:
             continue
         merged = {**search_index.get(project_id, {}), **card}
         props: dict[str, Any] = {}
+        if project_id in off_map_ids:
+            props["off_map"] = True
+            off_map_count += 1
         for field in WEB_FIELDS:
             value = merged.get(field)
             props[field] = ", ".join(str(part) for part in value) if isinstance(value, list) else value
@@ -297,6 +351,18 @@ def build(out_dir: Path, workers: int, min_projects: int) -> dict[str, Any]:
         raise SystemExit(
             f"собрано всего {len(features)} объектов (порог {min_projects}) — обновление отменено"
         )
+
+    prev_count = previous_project_count(prev_dir)
+    if prev_count and not allow_shrink and len(features) < prev_count * (1 - max_shrink):
+        raise SystemExit(
+            f"собрано {len(features)} объектов против {prev_count} в прошлой публикации "
+            f"(допустимая убыль — до {max_shrink:.0%}) — обновление отменено; "
+            "если сокращение настоящее, перезапустить с --allow-shrink"
+        )
+
+    write_json(out_dir / "known_ids.json",
+               sorted(int(f["properties"]["id"]) for f in features
+                      if f["properties"].get("id") is not None))
 
     write_json(out_dir / "projects_web.geojson", {
         "type": "FeatureCollection",
@@ -328,6 +394,8 @@ def build(out_dir: Path, workers: int, min_projects: int) -> dict[str, Any]:
         "generated_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
         "source": "https://stroimprosto.mos.ru/map/",
         "project_count": len(features),
+        "map_count": len(map_ids),
+        "off_map_count": off_map_count,
         "polygon_count": polygon_count,
         "point_fallback_count": point_count,
         "ps_with_content": len(with_content),
@@ -351,11 +419,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True, help="каталог для data/")
     parser.add_argument("--workers", type=int, default=12)
-    parser.add_argument("--min-projects", type=int, default=5000,
-                        help="страховка: меньше — считаем, что источник сломан, и не публикуем")
+    parser.add_argument("--prev", type=Path,
+                        help="каталог прошлой публикации (build/prev/data): источник известных id")
+    parser.add_argument("--min-index", type=int, default=1500,
+                        help="страховка: меньше объектов в индексе карты — считаем источник сломанным")
+    parser.add_argument("--min-projects", type=int, default=2000,
+                        help="страховка: меньше собранных объектов — не публикуем")
+    parser.add_argument("--max-shrink", type=float, default=0.2,
+                        help="допустимая убыль объектов против прошлой публикации (доля)")
+    parser.add_argument("--allow-shrink", action="store_true",
+                        help="разрешить публикацию, даже если объектов стало сильно меньше")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
-    build(args.out, args.workers, args.min_projects)
+    prev_dir = args.prev if args.prev and args.prev.exists() else None
+    build(args.out, args.workers, args.min_index, args.min_projects,
+          prev_dir, args.max_shrink, args.allow_shrink)
     return 0
 
 

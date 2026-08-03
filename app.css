@@ -871,6 +871,18 @@ select {
   color: #4b5563;
 }
 
+/* Объекты, которые источник убрал со своей карты, но карточки по ним ещё отдаёт */
+.legend-swatch_offmap {
+  background: repeating-linear-gradient(135deg, #cbd5f5 0 4px, #eef2ff 4px 8px);
+  border-style: dashed;
+  border-color: #6366f1;
+}
+
+.pill_offmap {
+  background: #eef2ff;
+  color: #4338ca;
+}
+
 .result-item_archived .result-item__title {
   color: var(--muted);
 }
@@ -884,4 +896,10 @@ select {
   color: #4b5563;
   font-size: 12px;
   line-height: 1.35;
+}
+
+.archived-notice_offmap {
+  border-left-color: #6366f1;
+  background: #eef2ff;
+  color: #3730a3;
 }
