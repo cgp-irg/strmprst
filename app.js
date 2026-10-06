@@ -17,15 +17,14 @@ const map = L.map('map', {
 window.stroimMap = map;
 
 L.control.zoom({ position: 'topright' }).addTo(map);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
-  subdomains: 'abcd',
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  className: 'osm-tiles',
   tileSize: 256,
-  zoomOffset: 0,
   maxZoom: 20,
-  maxNativeZoom: 20,
+  maxNativeZoom: 19,
   keepBuffer: 5,
   updateWhenIdle: true,
-  attribution: '&copy; OpenStreetMap &copy; CARTO',
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">участники OpenStreetMap</a>',
 }).addTo(map);
 
 const canvasRenderer = L.canvas({ padding: 0.45 });

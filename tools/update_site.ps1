@@ -3,7 +3,7 @@
 #   2. качает данные с stroimprosto.mos.ru (нужен российский IP)
 #   3. кладёт сайт + данные в ветку gh-pages одним коммитом (force-push, история не растёт)
 #
-# Запускается Планировщиком задач Windows (задача strmprst-weekly); логи — logs\update-<дата>.log
+# Запускается Планировщиком задач Windows (задача strmprst-weekly, ежедневно; публикует не чаще раза в -MinAgeDays); логи — logs\update-<дата>.log
 # Токен GitHub читается из файла (по умолчанию %USERPROFILE%\.strmprst\gh_token.txt).
 #
 # Файл должен оставаться в UTF-8 **с BOM**: Windows PowerShell 5.1 иначе читает кириллицу как ANSI.
@@ -16,7 +16,9 @@ param(
     [int]$Workers      = 12,
     [switch]$SkipPush,             # только собрать данные, ничего не публиковать
     [switch]$SkipData,             # не качать заново, взять уже собранное build\site\data
-    [switch]$AllowShrink           # разрешить публикацию, если объектов стало сильно меньше
+    [switch]$AllowShrink,          # разрешить публикацию, если объектов стало сильно меньше
+    [double]$MinAgeDays = 6,       # задача запускается ежедневно; публикацию моложе этого не трогаем
+    [switch]$Force                 # обновить, даже если публикация свежая
 )
 
 $ErrorActionPreference = 'Stop'
@@ -64,6 +66,13 @@ try {
     $python = (Get-Command python -ErrorAction Stop).Source
     $build  = Join-Path $RepoDir 'build\site'
 
+    # 0. догоняющий запуск после включения машины стартует раньше сети — ждём DNS до 15 минут
+    $deadline = (Get-Date).AddMinutes(15)
+    while (-not (Resolve-DnsName github.com -Type A -QuickTimeout -ErrorAction SilentlyContinue)) {
+        if ((Get-Date) -gt $deadline) { throw 'сеть так и не появилась: github.com не резолвится 15 минут' }
+        Start-Sleep -Seconds 30
+    }
+
     # 1. свежий код сайта
     Invoke-Step 'git fetch' { git -C $RepoDir fetch --depth 1 origin main }
     Invoke-Step 'git reset --hard origin/main' { git -C $RepoDir reset --hard origin/main }
@@ -84,6 +93,16 @@ try {
     catch {
         $prevOk = $false
         Write-Log "прошлую публикацию получить не удалось ($($_.Exception.Message)) — архив не пополняем"
+    }
+
+    # 1а. неудачный запуск повторится завтра; удачный — не повторяется до следующей недели
+    if ($prevOk -and -not $Force -and -not $SkipData) {
+        $prevMeta = Get-Content (Join-Path $prev 'data\metadata.json') -Raw -Encoding utf8 | ConvertFrom-Json
+        $age = ((Get-Date) - [datetime]$prevMeta.generated_at).TotalDays
+        if ($age -lt $MinAgeDays) {
+            Write-Log ("публикации {0:N1} сут. (< {1}) — обновление не нужно" -f $age, $MinAgeDays)
+            exit 0
+        }
     }
 
     # 2а. данные
