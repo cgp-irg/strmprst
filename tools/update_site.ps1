@@ -13,7 +13,7 @@ param(
     [string]$RepoDir,
     [string]$TokenFile = (Join-Path $env:USERPROFILE '.strmprst\gh_token.txt'),
     [string]$Remote    = 'https://github.com/cgp-irg/strmprst.git',
-    [int]$Workers      = 12,
+    [int]$Workers      = 4,             # при 12 источник с 2026-10 вешает запросы
     [switch]$SkipPush,             # только собрать данные, ничего не публиковать
     [switch]$SkipData,             # не качать заново, взять уже собранное build\site\data
     [switch]$AllowShrink,          # разрешить публикацию, если объектов стало сильно меньше

@@ -418,7 +418,7 @@ def build(out_dir: Path, workers: int, min_index: int, min_projects: int,
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True, help="каталог для data/")
-    parser.add_argument("--workers", type=int, default=12)
+    parser.add_argument("--workers", type=int, default=4)  # при 12 источник с 2026-10 вешает запросы
     parser.add_argument("--prev", type=Path,
                         help="каталог прошлой публикации (build/prev/data): источник известных id")
     parser.add_argument("--min-index", type=int, default=1500,
